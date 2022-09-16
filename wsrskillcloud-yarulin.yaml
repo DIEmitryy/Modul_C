@@ -1,0 +1,190 @@
+---
+- name: Git clone and add hosts inventory and apt update and install lynx 
+  hosts: localhost
+  tasks:
+    - name: GIT clone
+      git:
+       repo: https://github.com/Jeniston14/wsr-skillcloud
+       dest: /wsr-skillcloud
+       clone: yes
+    - name: Groups add Debian hosts
+      add_host: 
+       name: PJD-{{item}}
+       ansible_ssh_user: root
+       ansible_ssh_pass: toor
+       groups: Debian
+       ansible_host_key_checking: false
+      loop:
+       - '01'
+       - '02'
+    - name: Group add CentOS hosts
+      add_host:
+       name: PJC-{{item}}
+       ansible_ssh_user: root
+       ansible_ssh_pass: toor
+       groups: Centos
+       ansible_host_key_checking: false
+      loop:
+       - '01'
+       - '02'
+    - name: apt update localhost
+      apt:
+        update_cache: yes
+    - name: install lynx localhost
+      apt:
+        name: lynx 
+    - name: Decrypt privvars.yml
+      shell: ansible-vault decrypt --vault-id passwod /wsr-skillcloud/Users/privvars.yml
+- name: Update repo and install curl, firewalld and revome apparmor
+  hosts: Debian
+  tasks:
+   - name: apt update
+     apt:
+      update_cache: yes
+   - name: install curl
+     apt:
+       name: curl
+   - name: install firewalld
+     apt:
+       name: firewalld
+   - name: remove apparmor
+     apt:
+       name: apparmor
+       state: absent
+- name: CentOS update and install and disabled selinux
+  hosts: Centos
+  tasks:
+    - name: yum update
+      yum:
+        update_cache: yes
+    - name: install curl
+      yum:
+        name: curl
+    - name: install firewalld
+      yum:
+        name: firewalld
+    - name: enabled firewalld
+      systemd:
+        name: firewalld
+        state: started
+        enabled: yes
+    - name: disabled selinux
+      selinux:
+        state: disabled
+- name: Firwalld add ports and addusers and install key
+  hosts: all
+  tasks:
+    - name: include privvars.yam
+      include_vars:
+        file: /wsr-skillcloud/Users/privvars.yml
+    - name: dbug vars
+      debug: var=skillcloud
+    - name: add ports
+      firewalld:
+        zone: public
+        port: "{{ item }}"
+        permanent: true
+        immediate: yes
+        state: enabled
+      loop:
+        - "80/tcp"
+        - "8080/tcp"
+        - "1834/tcp"
+    - name: add users
+      user:
+        name: "{{ item.0 }}"
+        password: "{{ item.1 | password_hash('sha512') }}"
+      with_together:
+        - '{{ skillcloud.users }}'
+        - '{{ skillcloud.passwords }}'
+    - name: add users key
+      authorized_key:
+        user: "{{ item.0 }}"
+        key: "{{ skillcloud.publickey }}"
+      with_together:
+        - "{{ skillcloud.users }}"
+- name: Install Docker CentOS
+  gather_facts: No
+  hosts: Centos
+  tasks:
+   - name: Install yum utils
+     yum:
+       name: yum-utils
+       state: latest
+   - name: Install device-mapper-persistent-data
+     yum:
+       name: device-mapper-persistent-data
+       state: latest
+   - name: Install lvm2
+     yum:
+       name: lvm2
+       state: latest
+   - name: Add Docker repo
+     get_url:
+       url: https://download.docker.com/linux/centos/docker-ce.repo
+       dest: /etc/yum.repos.d/docker-ce.repo
+   - name: Install Docker
+     package:
+       name: docker-ce
+       state: latest
+   - name: Start Docker service
+     service:
+       name: docker
+       state: started
+       enabled: yes
+- name: Install Docker Debian
+  hosts: Debian
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker
+- name: Install Docker-compose and copy ./skillcloud-nginx
+  hosts: all
+  tasks:
+    - name: install docker-compose
+      script: /wsr-skillcloud/docker-compose.sh
+    - name: Copy ./skillcloud-nginx
+      copy:
+        src: ./skillcloud-nginx
+        dest: /
+- name: SSHD add port and key and restat sshd firewalld
+  hosts: all
+  tasks:
+    - name: sshd port and key
+      script: ./sshd_port_key.sh
+    - name: Restart SSH
+      systemd:
+        name: sshd
+        state: restarted
+    - name: restart firewalld
+      systemd:
+        name: firewalld
+        state: restarted
+- name: Change ansible port ssh and restart all
+  hosts: all
+  tasks:
+    - name: change ssh port to 1834
+      set_fact:
+        ansible_port: 1834
+    - name: restart all
+      reboot:
+- name: Ansible ping all
+  hosts: all
+  tasks:
+    - name: ping
+      ping:
+- name: Disadled unused service firewalld
+  host: all
+  tasks:
+    - name: ssh
+      firewalld:
+        zone: public
+        permanent: yes
+        immediate: yes
+        service: "{{ item }}"
+        state: disabled
+      loop:
+        - "cockpit"
+        - "dhcpv6-client"
+        - "ssh"
+
